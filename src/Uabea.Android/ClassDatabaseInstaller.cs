@@ -1,68 +1,51 @@
 using Android.Content.Res;
+using System.Security.Cryptography;
 using Uabea.Core;
 
 namespace Uabea.Android;
 
 static class ClassDatabaseInstaller
 {
-    const string Expected = "dcea167eb5e8d17e7aa33c933a7332e10f88642f7e6e791b0cc2a6b7f44ec247";
+    const string Expected = "DCEA167EB5E8D17E7AA33C933A7332E10F88642F7E6E791B0CC2A6B7F44EC247";
 
-    // Multiple Android processes can enter Activity.OnCreate at the same time.
-    // Serialize installation across processes, not just across threads.
     public static void EnsureSync(AssetManager assets, string destination, CancellationToken cancel)
     {
-        string lockPath = destination + ".install.lock";
-        FileStream? installationLock = null;
-        DateTime deadline = DateTime.UtcNow.AddSeconds(20);
+        cancel.ThrowIfCancellationRequested();
 
-        while (installationLock is null)
+        if (File.Exists(destination) &&
+            StreamTools.HashFile(destination, cancel).Equals(Expected, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        // Hash the bytes as they are copied. Reopening a FileShare.None staging file
+        // through File.OpenRead is not reliable on Android's Unix file implementation.
+        string staging = destination + "." + Guid.NewGuid().ToString("N") + ".partial";
+        try
         {
-            cancel.ThrowIfCancellationRequested();
-            try
+            using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            using (var source = assets.Open("classdata.tpk"))
+            using (var target = new FileStream(staging, FileMode.CreateNew, FileAccess.Write, FileShare.Read))
             {
-                installationLock = new FileStream(
-                    lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-            }
-            catch (IOException) when (DateTime.UtcNow < deadline)
-            {
-                Thread.Sleep(50);
-            }
-        }
-
-        using (installationLock)
-        {
-            cancel.ThrowIfCancellationRequested();
-            if (File.Exists(destination) &&
-                StreamTools.HashFile(destination, cancel).Equals(Expected, StringComparison.OrdinalIgnoreCase))
-                return;
-
-            // A unique staging path also protects against stale files left by a killed process.
-            string staging = destination + "." + Guid.NewGuid().ToString("N") + ".partial";
-            try
-            {
-                using (var source = assets.Open("classdata.tpk"))
-                using (var target = new FileStream(staging, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                byte[] buffer = new byte[65536];
+                int count;
+                while ((count = source.Read(buffer, 0, buffer.Length)) > 0)
                 {
-                    byte[] buffer = new byte[65536];
-                    int count;
-                    while ((count = source.Read(buffer, 0, buffer.Length)) > 0)
-                    {
-                        cancel.ThrowIfCancellationRequested();
-                        target.Write(buffer, 0, count);
-                    }
-                    target.Flush(true);
+                    cancel.ThrowIfCancellationRequested();
+                    target.Write(buffer, 0, count);
+                    hash.AppendData(buffer, 0, count);
                 }
-
-                if (!StreamTools.HashFile(staging, cancel).Equals(Expected, StringComparison.OrdinalIgnoreCase))
-                    throw new IOException("La base de clases empaquetada está incompleta o dañada.");
-
-                File.Move(staging, destination, true);
+                target.Flush(true);
             }
-            finally
-            {
-                if (File.Exists(staging))
-                    File.Delete(staging);
-            }
+
+            string actual = Convert.ToHexString(hash.GetHashAndReset());
+            if (!actual.Equals(Expected, StringComparison.OrdinalIgnoreCase))
+                throw new IOException($"Packaged classdata.tpk failed SHA-256 validation. Expected {Expected}, got {actual}.");
+
+            File.Move(staging, destination, true);
+        }
+        finally
+        {
+            if (File.Exists(staging))
+                File.Delete(staging);
         }
     }
 }
