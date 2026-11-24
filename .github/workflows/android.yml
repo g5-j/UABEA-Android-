@@ -78,29 +78,6 @@ jobs:
         with:
           name: UABEA-Android-source
           path: artifacts/UABEA-Android-source.zip
-  release:
-    name: Publish public APK release
-    needs: [core, apk]
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Download signed APK package
-        uses: actions/download-artifact@v4
-        with:
-          name: UABEA-Android-arm64-debug
-          path: release-assets
-      - name: Publish a new public release for this build
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: build-${{ github.run_number }}-${{ github.run_attempt }}
-          name: UABEA Android build ${{ github.run_number }} ( ${{ github.sha }} )
-          target_commitish: ${{ github.sha }}
-          prerelease: true
-          generate_release_notes: true
-          files: |
-            release-assets/UABEA-Android-arm64-debug.apk
-            release-assets/SHA256SUMS.txt
-          fail_on_unmatched_files: true
   android-saf:
     needs: core
     runs-on: ubuntu-24.04
@@ -142,3 +119,26 @@ jobs:
           name: android-saf-test-results
           path: artifacts/android-tests
           if-no-files-found: warn
+  release:
+    name: Publish public APK release
+    needs: [core, apk, android-saf]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download signed APK package
+        uses: actions/download-artifact@v4
+        with:
+          name: UABEA-Android-arm64-debug
+          path: release-assets
+      - name: Publish a new public release for this build
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}-${{ github.run_attempt }}
+          name: UABEA Android build ${{ github.run_number }} ( ${{ github.sha }} )
+          target_commitish: ${{ github.sha }}
+          prerelease: true
+          generate_release_notes: true
+          files: |
+            release-assets/UABEA-Android-arm64-debug.apk
+            release-assets/SHA256SUMS.txt
+          fail_on_unmatched_files: true
